@@ -111,6 +111,7 @@ async def voice_design(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+import traceback
 
 @app.post("/voice-clone")
 async def voice_clone(
@@ -120,26 +121,30 @@ async def voice_clone(
     ref_text: str = Form(None),
     speed: float = Form(1.0),
     steps: int = Form(32),
-    x_tts_secret: str = Header(None) # ✨ Add this parameter
+    x_tts_secret: str = Header(None)
 ):
-    verify_request(x_tts_secret)
-    # 1. Save the uploaded audio file temporarily
-    temp_ref_path = f"{TEMP_DIR}/ref_{uuid.uuid4().hex[:8]}_{ref_audio.filename}"
-    with open(temp_ref_path, "wb") as buffer:
-        shutil.copyfileobj(ref_audio.file, buffer)
-        
     try:
-        # 2. Extract the Voice Clone Prompt using the saved file
-        # If the user didn't provide ref_text, pass None and the model will attempt to auto-transcribe if it has ASR loaded
+        verify_request(x_tts_secret)
+        
+        # 1. Save reference audio
+        unique_id = uuid.uuid4().hex[:8]
+        temp_ref_path = f"{TEMP_DIR}/ref_{unique_id}_{ref_audio.filename}"
+        with open(temp_ref_path, "wb") as buffer:
+            shutil.copyfileobj(ref_audio.file, buffer)
+            
+        print(f"📥 [COLAB] Received file: {temp_ref_path}")
+
+        # 2. Extract Clone Prompt
+        # Logic: Use provided text, otherwise let ASR (which must be loaded) handle it
         safe_ref_text = ref_text.strip() if (ref_text and ref_text.strip()) else None
+        
         vc_prompt = model.create_voice_clone_prompt(
             ref_audio=temp_ref_path, 
             ref_text=safe_ref_text
         )
         
+        # 3. Generate Cloned Voice
         gen_config = OmniVoiceGenerationConfig(num_step=steps, guidance_scale=2.0)
-        
-        # 3. Generate the cloned audio
         audio = model.generate(
             text=text, 
             language=None if language == "Auto" else language,
@@ -148,20 +153,22 @@ async def voice_clone(
             generation_config=gen_config
         )
         
+        # 4. Save and Return
         waveform = (audio[0] * 32767).astype(np.int16)
         output_path = get_safe_filename(text, language)
-        wavfile.write(output_path, sampling_rate, waveform)
+        wavfile.write(output_path, model.sampling_rate, waveform)
         
-        print(f"✅ Generation Success: {output_path}")
-        return FileResponse(output_path, media_type="audio/wav")        
+        return FileResponse(output_path, media_type="audio/wav")
+        
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # 🚀 THIS IS THE KEY: It prints the error in RED in Colab
+        print("🔥 [COLAB CRASH DETECTED]")
+        traceback.print_exc() 
+        # Return the actual error to your Python backend
+        raise HTTPException(status_code=500, detail=f"Colab Model Error: {str(e)}")
     finally:
-        # 4. Clean up the uploaded reference file so we don't fill up the Colab disk
-        if os.path.exists(temp_ref_path):
+        if 'temp_ref_path' in locals() and os.path.exists(temp_ref_path):
             os.remove(temp_ref_path)
-
-
 
 # 👇 Load the model into the GPU (device="cuda") using float16 for maximum speed
 print("⏳ Loading Whisper Small model into Colab GPU...")
