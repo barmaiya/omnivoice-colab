@@ -54,7 +54,7 @@ model = OmniVoice.from_pretrained(
     "k2-fsa/OmniVoice",
     device_map=device,
     dtype=torch.float16 if device == "cuda" else torch.float32,
-    load_asr=False,
+    load_asr=True,
 )
 sampling_rate = model.sampling_rate
 TEMP_DIR = "./Omni_Audio"
@@ -131,9 +131,10 @@ async def voice_clone(
     try:
         # 2. Extract the Voice Clone Prompt using the saved file
         # If the user didn't provide ref_text, pass None and the model will attempt to auto-transcribe if it has ASR loaded
+        safe_ref_text = ref_text.strip() if (ref_text and ref_text.strip()) else None
         vc_prompt = model.create_voice_clone_prompt(
             ref_audio=temp_ref_path, 
-            ref_text=ref_text if ref_text and ref_text.strip() else None
+            ref_text=safe_ref_text
         )
         
         gen_config = OmniVoiceGenerationConfig(num_step=steps, guidance_scale=2.0)
@@ -151,8 +152,8 @@ async def voice_clone(
         output_path = get_safe_filename(text, language)
         wavfile.write(output_path, sampling_rate, waveform)
         
-        return FileResponse(output_path, media_type="audio/wav")
-        
+        print(f"✅ Generation Success: {output_path}")
+        return FileResponse(output_path, media_type="audio/wav")        
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
